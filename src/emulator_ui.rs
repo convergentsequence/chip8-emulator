@@ -1,37 +1,96 @@
 use egui::Ui;
+use core::panic;
+use std::sync::mpsc::{self, channel};
+use std::sync::mpsc::Sender;
+use std::thread::JoinHandle;
 
-struct WindowStates{
+use crate::emulator;
+
+/// Holds open/closed states of all ui windows
+struct WindowStates {
     control_panel: bool
 }
 
-impl Default for WindowStates{
+impl Default for WindowStates {
     fn default() -> Self {
         Self { control_panel: true }
     }
 }
 
-pub struct EmulatorUI{
-    window_states: WindowStates,
+/// Controls and communicates with the emulator thread
+struct EmulatorInterface {
+    /// Sender used to close the emulator externally, when any value is sent the emulator closes
+    kill_sender: Option<Sender<bool>>, 
+    /// Handle to emulator thread
+    emulator_handle: Option<JoinHandle<()>>,
 }
 
-impl EmulatorUI{
+impl EmulatorInterface{
+    /// Returns true if the emulator is currently running
+    fn status(&mut self) -> bool {
+        match &self.emulator_handle {
+            Some(handle) => !handle.is_finished(),
+            None => false
+        }
+    }
+
+    fn start(&mut self) {
+        if let Some(_) = self.emulator_handle{
+            panic!("Attempted to start emulator while already running");
+        }
+
+        let kill_channel = channel();
+        self.kill_sender = Some(kill_channel.0);
+        self.emulator_handle = Some(emulator::start_thread(kill_channel.1));
+    }
+    
+    fn kill(&mut self){
+        if let None = self.emulator_handle{
+            panic!("Attempted to kill emulator while it is not running");
+        }
+
+        self.kill_sender.as_ref().unwrap().send(true).unwrap();
+
+        let handle = std::mem::replace(&mut self.emulator_handle, None).unwrap();
+        handle.join().unwrap();
+    }
+}
+
+impl Default for EmulatorInterface {
+    fn default() -> Self {
+        Self{
+            kill_sender: None,
+            emulator_handle: None,
+        }
+    }
+} 
+
+/// Renders the actual ui
+pub struct EmulatorUI {
+    window_states: WindowStates,
+    emulator_interface: EmulatorInterface
+}
+
+impl EmulatorUI {
+    /// Draws a button that controls open/closed state of a window that the window_state belongs to
     #[inline]
-    fn create_window_toggle(ui: &mut Ui, window_state: &mut bool, name: &str){
+    fn create_window_toggle(ui: &mut Ui, window_state: &mut bool, name: &str) {
         if ui.button(if *window_state {format!("[*] {}", name)} else {format!("[_] {}", name)}).clicked() {
             *window_state = !*window_state;
         }
     }
 }
 
-impl Default for EmulatorUI{
+impl Default for EmulatorUI {
     fn default() -> Self {
         Self { 
             window_states: WindowStates::default(),
+            emulator_interface: EmulatorInterface::default(),
         }
     }
 }
 
-impl eframe::App for EmulatorUI{
+impl eframe::App for EmulatorUI {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
      
         ctx.set_visuals(egui::Visuals::dark());   // dark theme
@@ -39,22 +98,31 @@ impl eframe::App for EmulatorUI{
         // <background and menu bar>
         egui::CentralPanel::default()
             .show(ctx, |ui|{
-                ui.horizontal(|ui|{
+                ui.horizontal(|ui| {
                     EmulatorUI::create_window_toggle(ui, &mut self.window_states.control_panel, "Control Panel");
                 });
             });
         // </background and menu bar>
 
         // <control panel>
-        egui::Window::new("Control panel")
+        egui::Window::new("Control Panel")
             .resizable(true)
             .open(&mut self.window_states.control_panel)
             .default_pos(egui::pos2(10f32, 40f32))
-            .show(ctx, |ui|{
+            .show(ctx, |ui| {
 
                 ui.allocate_space(egui::vec2(0f32, 5f32)); // padding
 
-                
+                // <start stop button>
+                let should_start = !self.emulator_interface.status();
+                if ui.button(if should_start {"Start Emulator"} else {"Stop Emulator"}).clicked() {
+                    if should_start{
+                        self.emulator_interface.start();
+                    }else{
+                        self.emulator_interface.kill();
+                    }
+                }
+                // </start stop button>
 
                 ui.allocate_space(egui::vec2(60f32, 10f32)); // padding
             }); 
