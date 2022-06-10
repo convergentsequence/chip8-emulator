@@ -46,9 +46,24 @@ impl Emulator{
         }
     }
 
+    fn clocked_execution<F, T>(func: F, ctx: &EmulatorContext<Window>, freq: u32, last_tick: &mut u32, params: T) 
+    where F: Fn(T) -> () {
+        let sdl = &ctx.sdl_ctx;
+        let current_tick = sdl.timer().unwrap().ticks();
+
+        if current_tick - *last_tick >= 1000/freq {
+            func(params);
+
+            *last_tick = current_tick;
+        }
+    }
+
+
     fn start(&mut self){
         let mut context = Emulator::init_context();
         let mut event_pump = context.sdl_ctx.event_pump().unwrap();
+
+        let mut last = 0u32;
 
         'running: loop {
             if let Ok(_) = self.kill_receiver.try_recv() {
@@ -60,6 +75,10 @@ impl Emulator{
 
             context.canvas.set_draw_color(Color::RGB(255, 255, 255));
             context.canvas.draw_point(Point::new(10,10)).unwrap();
+
+            Emulator::clocked_execution(|_| {
+                println!("60hz");
+            }, &context, 60, &mut last, ());
 
             for event in event_pump.poll_iter(){
                 if let Event::Quit { .. } | Event::KeyDown { keycode: Some(Keycode::Escape | Keycode::Q), .. } = event {
