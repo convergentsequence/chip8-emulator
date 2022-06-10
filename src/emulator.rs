@@ -32,7 +32,7 @@ struct C8 {
 
 impl Default for C8{
     fn default() -> Self {
-        Self { memory: [0; 4096], V: [0; 16], I: 0, PC: 0, stack: [0; 16], SP: 0 }
+        Self { memory: [0; 4096], V: [0; 16], I: 0, PC: 0x200, stack: [0; 16], SP: 0 }
     }
 }
 
@@ -91,7 +91,7 @@ impl Emulator{
             file.read(&mut internals.memory[0x200..]).unwrap();
         }
 
-        let mut gbuf = Box::new([0u8; 64*32]);
+        let mut gbuf = [0u8; 64*32];
 
         gbuf[64+20] = 1;
 
@@ -106,9 +106,9 @@ impl Emulator{
                 }
             }
 
-
+            let opcode: u16 = (internals.memory[internals.PC as usize] as u16) << 8 | internals.memory[(internals.PC + 1) as usize] as u16;
             
-
+            
 
             self.render_graphics(&gbuf);
         }
