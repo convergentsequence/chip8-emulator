@@ -33,10 +33,19 @@ impl EmulatorInterface{
             None => false
         }
     }
+    
+    fn join_thread(&mut self) {
+        let handle = std::mem::replace(&mut self.emulator_handle, None).unwrap();
+        handle.join().unwrap();
+    }
 
     fn start(&mut self) {
         if let Some(_) = self.emulator_handle{
-            panic!("Attempted to start emulator while already running");
+            if self.status() {
+                panic!("Attempted to start emulator while already running");
+            }else{
+                self.join_thread();
+            }
         }
 
         let kill_channel = channel();
@@ -51,8 +60,7 @@ impl EmulatorInterface{
 
         self.kill_sender.as_ref().unwrap().send(true).unwrap();
 
-        let handle = std::mem::replace(&mut self.emulator_handle, None).unwrap();
-        handle.join().unwrap();
+        self.join_thread();
     }
 }
 
