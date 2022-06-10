@@ -1,6 +1,6 @@
 use egui::Ui;
 use core::panic;
-use std::sync::mpsc::{self, channel};
+use std::sync::mpsc::channel;
 use std::sync::mpsc::Sender;
 use std::thread::JoinHandle;
 
@@ -33,7 +33,7 @@ impl EmulatorInterface{
             None => false
         }
     }
-    
+
     fn join_thread(&mut self) {
         let handle = std::mem::replace(&mut self.emulator_handle, None).unwrap();
         handle.join().unwrap();
