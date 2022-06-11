@@ -1,7 +1,10 @@
 use egui::Ui;
+use egui::mutex::Mutex;
 use core::panic;
+use std::ops::Deref;
+use std::sync::Arc;
 use std::sync::mpsc::channel;
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::{Sender, Receiver};
 use std::thread::JoinHandle;
 
 use crate::emulator;
@@ -21,9 +24,11 @@ impl Default for WindowStates {
 struct EmulatorInterface {
     /// Sender used to close the emulator externally, when any value is sent the emulator closes
     kill_sender: Option<Sender<bool>>, 
+    /// Passed to emulator thread to write all executed opcodes to
+    executed_opcodes: Arc<Mutex<Vec<String>>>,
     /// Handle to emulator thread
     emulator_handle: Option<JoinHandle<()>>,
-}
+}   
 
 impl EmulatorInterface{
     /// Returns true if the emulator is currently running
@@ -39,7 +44,7 @@ impl EmulatorInterface{
         handle.join().unwrap();
     }
 
-    fn start(&mut self) {
+    fn start(&mut self, egui_ctx: &egui::Context) {
         if let Some(_) = self.emulator_handle{
             if self.status() {
                 panic!("Attempted to start emulator while already running");
@@ -50,7 +55,7 @@ impl EmulatorInterface{
 
         let kill_channel = channel();
         self.kill_sender = Some(kill_channel.0);
-        self.emulator_handle = Some(emulator::start_thread(kill_channel.1));
+        self.emulator_handle = Some(emulator::start_thread(kill_channel.1, self.executed_opcodes.clone(), egui_ctx.clone()));
     }
     
     fn kill(&mut self){
@@ -68,6 +73,7 @@ impl Default for EmulatorInterface {
     fn default() -> Self {
         Self{
             kill_sender: None,
+            executed_opcodes: Arc::new(Mutex::new(vec![])),
             emulator_handle: None,
         }
     }
@@ -102,7 +108,14 @@ impl eframe::App for EmulatorUI {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
      
         ctx.set_visuals(egui::Visuals::dark());   // dark theme
-
+        {
+            let vec_mutex = self.emulator_interface.executed_opcodes.lock();
+            let vec = vec_mutex.deref();
+            if let Some(oc) = vec.last() {
+                println!("{}",oc);
+            }
+           
+        }
         // <background and menu bar>
         egui::CentralPanel::default()
             .show(ctx, |ui|{
@@ -125,7 +138,7 @@ impl eframe::App for EmulatorUI {
                 let should_start = !self.emulator_interface.status();
                 if ui.button(if should_start {"Start Emulator"} else {"Stop Emulator"}).clicked() {
                     if should_start{
-                        self.emulator_interface.start();
+                        self.emulator_interface.start(&ctx);
                     }else{
                         self.emulator_interface.kill();
                     }

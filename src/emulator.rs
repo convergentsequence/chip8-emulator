@@ -1,11 +1,14 @@
 #![allow(unused_variables, dead_code, unused_imports)]
 
 use std::io::Read;
+use std::ops::DerefMut;
+use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 use std::thread;
 use std::fs::File;
 
 use egui::Memory;
+use egui::mutex::Mutex;
 use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
 use sdl2::pixels::Color;
@@ -36,11 +39,34 @@ impl Default for C8{
     }
 }
 
-pub struct Emulator{
+struct UIInterface{
     kill_receiver: Receiver<bool>,
     target_file: String,
+    opcodes_vec: Arc<Mutex<Vec<String>>>,
+    egui_ctx: egui::Context,
+}
+
+/// interfaces the ui
+impl UIInterface{
+    fn new( kill_receiver: Receiver<bool>, 
+            target_file: String, 
+            opcodes_vec: Arc<Mutex<Vec<String>>>, 
+            egui_ctx: egui::Context) -> Self
+    {
+        Self { 
+            kill_receiver, 
+            target_file, 
+            opcodes_vec,
+            egui_ctx,
+        }
+    }
+}
+
+pub struct Emulator{
+    ui_interface: UIInterface,
     context: EmulatorContext<Window>,
 }
+
 
 impl Emulator{
     fn init_context() -> EmulatorContext<Window> {
@@ -61,10 +87,9 @@ impl Emulator{
         EmulatorContext{ sdl_ctx: sdl_ctx, canvas: canvas }
     }
 
-    fn new(kill_receiver: Receiver<bool>, target_file: String) -> Emulator {
+    fn new(kill_receiver: Receiver<bool>, target_file: String, opcode_vec: Arc<Mutex<Vec<String>>>, egui_ctx: egui::Context) -> Emulator {
         Emulator { 
-            kill_receiver: kill_receiver, 
-            target_file: target_file,
+            ui_interface: UIInterface::new(kill_receiver, target_file, opcode_vec, egui_ctx),
             context: Emulator::init_context(),
         }
     }
@@ -81,12 +106,32 @@ impl Emulator{
         }
     }
 
+    fn send_opcode(&mut self, value: String) {
+        let mut locked = self.ui_interface.opcodes_vec.lock();
+        let vec = locked.deref_mut();
+        vec.push(value);
+        self.ui_interface.egui_ctx.request_repaint();
+    }
+
     fn start(&mut self){
+        let timer = self.context.sdl_ctx.timer().unwrap();
+        let mut current_tick: u32;
+
+        macro_rules! clocked {
+            ($code:block, $last_tick:expr, $freq:expr) => {
+                if current_tick - $last_tick >= 1000/$freq {
+                    $code;
+                    $last_tick = current_tick;
+                }
+            };
+        }
+
+
         let mut event_pump = self.context.sdl_ctx.event_pump().unwrap();
         let mut internals = C8::default();
 
         { //read file block
-            let mut file = File::open(self.target_file.clone()).unwrap();
+            let mut file = File::open(self.ui_interface.target_file.clone()).unwrap();
 
             file.read(&mut internals.memory[0x200..]).unwrap();
         }
@@ -94,9 +139,13 @@ impl Emulator{
         let mut gbuf = [0u8; 64*32];
 
         gbuf[64+20] = 1;
+        gbuf[69+420] = 1;
+        
 
+
+        let mut last_opcode_tick = 0u32;
         'running: loop {
-            if let Ok(_) = self.kill_receiver.try_recv() {
+            if let Ok(_) = self.ui_interface.kill_receiver.try_recv() {
                 break 'running;
             }
 
@@ -105,10 +154,15 @@ impl Emulator{
                     break 'running;
                 }
             }
+            current_tick = timer.ticks();
 
             let opcode: u16 = (internals.memory[internals.PC as usize] as u16) << 8 | internals.memory[(internals.PC + 1) as usize] as u16;
             
+            clocked!({
+                println!("Second");
+            }, last_opcode_tick, 1);
             
+         
 
             self.render_graphics(&gbuf);
         }
@@ -131,9 +185,9 @@ impl Emulator{
 }
 
 
-pub fn start_thread(kill_receiver: Receiver<bool>) -> thread::JoinHandle<()>{
+pub fn start_thread(kill_receiver: Receiver<bool>, opcode_vec: Arc<Mutex<Vec<String>>>, egui_ctx: egui::Context) -> thread::JoinHandle<()>{
     thread::spawn(move || {
-        let mut emulator = Emulator::new(kill_receiver, (r"C:\C8Games\Connect_4.ch8").to_owned());
+        let mut emulator = Emulator::new(kill_receiver, (r"C:\C8Games\Connect_4.ch8").to_owned(), opcode_vec, egui_ctx);
         emulator.start();
     })
 }
