@@ -4,19 +4,20 @@ use core::panic;
 use std::ops::Deref;
 use std::sync::Arc;
 use std::sync::mpsc::channel;
-use std::sync::mpsc::{Sender, Receiver};
+use std::sync::mpsc::{Sender};
 use std::thread::JoinHandle;
 
 use crate::emulator;
 
 /// Holds open/closed states of all ui windows
 struct WindowStates {
-    control_panel: bool
+    control_panel: bool,
+    opcodes_view: bool,
 }
 
 impl Default for WindowStates {
     fn default() -> Self {
-        Self { control_panel: true }
+        Self { control_panel: true, opcodes_view: false }
     }
 }
 
@@ -108,19 +109,13 @@ impl eframe::App for EmulatorUI {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
      
         ctx.set_visuals(egui::Visuals::dark());   // dark theme
-        {
-            let vec_mutex = self.emulator_interface.executed_opcodes.lock();
-            let vec = vec_mutex.deref();
-            if let Some(oc) = vec.last() {
-                println!("{}",oc);
-            }
-           
-        }
+        
         // <background and menu bar>
         egui::CentralPanel::default()
             .show(ctx, |ui|{
                 ui.horizontal(|ui| {
                     EmulatorUI::create_window_toggle(ui, &mut self.window_states.control_panel, "Control Panel");
+                    EmulatorUI::create_window_toggle(ui, &mut self.window_states.opcodes_view, "View Opcodes");
                 });
             });
         // </background and menu bar>
@@ -130,6 +125,7 @@ impl eframe::App for EmulatorUI {
             .resizable(true)
             .open(&mut self.window_states.control_panel)
             .default_pos(egui::pos2(10f32, 40f32))
+            .default_size([250.0, 150.0])
             .show(ctx, |ui| {
 
                 ui.allocate_space(egui::vec2(0f32, 5f32)); // padding
@@ -146,7 +142,41 @@ impl eframe::App for EmulatorUI {
                 // </start stop button>
 
                 ui.allocate_space(egui::vec2(60f32, 10f32)); // padding
+                ui.allocate_space(ui.available_size());
             }); 
         // </control panel>
+
+
+        // <opcodes view>
+        egui::Window::new("Opcodes")
+            .open(&mut self.window_states.opcodes_view)
+            .default_pos(egui::pos2(50f32, 40f32))
+            .default_size([500.0, 500.0])
+            .resizable(false)
+            .show(ctx, |ui| {
+                egui::containers::ScrollArea::new([true, true])
+                .max_height(500f32)
+                .show(ui, |ui|{
+                    egui::Grid::new("my_grid")
+                    .num_columns(1)
+                    .spacing([40.0, 4.0])
+                    .striped(true)
+                    .show(ui, |ui| {
+                        {
+                            let vec_mutex = self.emulator_interface.executed_opcodes.lock();
+                            let vec = vec_mutex.deref();
+                            for oc in vec.iter().rev() {
+                                ui.horizontal(|ui| {
+                                    ui.label(oc);
+                                    ui.allocate_space(egui::Vec2::new(ui.available_width(), 0f32));
+                                });
+                                ui.end_row();
+                            }
+                        }
+                    });
+                });
+                ui.allocate_space(ui.available_size());
+            });
+        // </opcodes view>
     }
 }

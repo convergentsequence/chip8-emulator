@@ -1,5 +1,3 @@
-#![allow(unused_variables, dead_code, unused_imports)]
-
 use std::io::Read;
 use std::ops::DerefMut;
 use std::sync::Arc;
@@ -7,14 +5,13 @@ use std::sync::mpsc::Receiver;
 use std::thread;
 use std::fs::File;
 
-use egui::Memory;
 use egui::mutex::Mutex;
 use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
 use sdl2::pixels::Color;
 use sdl2::rect::Point;
-use sdl2::{Sdl, VideoSubsystem, sys::SDL_Window, render::Canvas, video::Window};
-use sdl2::render::{self, RenderTarget};
+use sdl2::{Sdl, render::Canvas, video::Window};
+use sdl2::render::{RenderTarget};
 
 const WINDOW_TITLE: &str = "CHIP-8";
 
@@ -23,7 +20,7 @@ struct EmulatorContext<T: RenderTarget>{
     canvas: Canvas<T>,
 }
 
-#[allow(non_snake_case)]
+#[allow(non_snake_case, dead_code)]
 struct C8 {
     memory: [u8; 4096],
     V: [u8; 16],
@@ -38,7 +35,7 @@ impl Default for C8{
         Self { memory: [0; 4096], V: [0; 16], I: 0, PC: 0x200, stack: [0; 16], SP: 0 }
     }
 }
-
+#[allow(dead_code)]
 struct UIInterface{
     kill_receiver: Receiver<bool>,
     target_file: String,
@@ -82,8 +79,6 @@ impl Emulator{
         let mut canvas = window.into_canvas().build().unwrap();
         canvas.set_logical_size(64, 32).unwrap();
         
-        let gbuf: Box<[bool; 64*32]> = Box::new([false; 64*32]);
-        
         EmulatorContext{ sdl_ctx: sdl_ctx, canvas: canvas }
     }
 
@@ -94,23 +89,13 @@ impl Emulator{
         }
     }
 
-    /// Execute \<func> with parameters \<params> \<freq> times a second within an infinite loop
-    fn clocked_execution<F, T>(func: F, ctx: &EmulatorContext<Window>, freq: u32, last_tick: &mut u32, params: T) 
-    where F: Fn(T) -> () {
-        let sdl = &ctx.sdl_ctx;
-        let current_tick = sdl.timer().unwrap().ticks();
-
-        if current_tick - *last_tick >= 1000/freq {
-            func(params);
-            *last_tick = current_tick;
-        }
-    }
-
     fn send_opcode(&mut self, value: String) {
         let mut locked = self.ui_interface.opcodes_vec.lock();
         let vec = locked.deref_mut();
         vec.push(value);
-        self.ui_interface.egui_ctx.request_repaint();
+        if vec.len() > 100 {
+            vec.remove(0);
+        }
     }
 
     fn start(&mut self){
@@ -126,7 +111,6 @@ impl Emulator{
             };
         }
 
-
         let mut event_pump = self.context.sdl_ctx.event_pump().unwrap();
         let mut internals = C8::default();
 
@@ -141,9 +125,8 @@ impl Emulator{
         gbuf[64+20] = 1;
         gbuf[69+420] = 1;
         
-
-
         let mut last_opcode_tick = 0u32;
+        let mut last_render_tick = 0u32;
         'running: loop {
             if let Ok(_) = self.ui_interface.kill_receiver.try_recv() {
                 break 'running;
@@ -156,15 +139,22 @@ impl Emulator{
             }
             current_tick = timer.ticks();
 
-            let opcode: u16 = (internals.memory[internals.PC as usize] as u16) << 8 | internals.memory[(internals.PC + 1) as usize] as u16;
             
             clocked!({
-                println!("Second");
-            }, last_opcode_tick, 1);
+                let opcode: u16 = (internals.memory[internals.PC as usize] as u16) << 8 | internals.memory[(internals.PC + 1) as usize] as u16;
+                
+                if opcode != 0{
+                    self.send_opcode(format!("{:04X}", opcode));
+                    internals.PC += 2;
+                }
+                
+            }, last_opcode_tick, 60);
             
          
-
-            self.render_graphics(&gbuf);
+            clocked!({
+                self.render_graphics(&gbuf);
+                self.ui_interface.egui_ctx.request_repaint();
+            }, last_render_tick, 60);
         }
     }
 
