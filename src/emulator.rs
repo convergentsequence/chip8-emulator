@@ -4,7 +4,7 @@ use std::sync::mpsc::Receiver;
 use std::thread;
 use std::fs::File;
 
-use egui::mutex::Mutex;
+use egui::mutex::{Mutex, MutexGuard};
 use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
 use sdl2::pixels::Color;
@@ -24,17 +24,19 @@ struct GraphicsContext<T: RenderTarget>{
 #[allow(non_snake_case, dead_code)]
 #[derive(Clone)]
 pub struct C8 {
-    memory: [u8; 4096],
-    V: [u8; 16],
-    I: u16,
-    PC: u16,
-    stack: [u16; 16],
-    SP: u8,
+    pub memory: [u8; 4096],
+    pub V: [u8; 16],
+    pub I: u16,
+    pub PC: u16,
+    pub stack: [u16; 16],
+    pub SP: u8,
+    pub delay_timer: u8,
+    pub sound_timer: u8,
 }
 
 impl Default for C8{
     fn default() -> Self {
-        Self { memory: [0; 4096], V: [0; 16], I: 0, PC: 0x200, stack: [0; 16], SP: 0 }
+        Self { memory: [0; 4096], V: [0; 16], I: 0, PC: 0x200, stack: [0; 16], SP: 0, delay_timer: 0, sound_timer: 0 }
     }
 }
 //#[allow(dead_code)]
@@ -85,14 +87,15 @@ impl Emulator{
     }
 
     fn new(kill_receiver: Receiver<bool>, target_file: String, egui_ctx: egui::Context, inter_thread: Arc<Mutex<InterThreadData>>) -> Emulator {
+        inter_thread.lock().executed_instructions.clear();
+        inter_thread.lock().internal_state.clone_from(&C8::default());
         Emulator { 
             ui_interface: UIInterface::new(kill_receiver, target_file, egui_ctx, inter_thread),
             context: Emulator::init_context(),
         }
     }
-
-    fn send_state(&mut self, opcode: String, internal_state: &C8) {
-        let mut locked = self.ui_interface.inter_thread.lock();
+    
+    fn send_state(locked: &mut MutexGuard<InterThreadData>, opcode: String, internal_state: &C8) {
         locked.executed_instructions.push(opcode);
         if locked.executed_instructions.len() > 100 {
             locked.executed_instructions.remove(0);
@@ -108,6 +111,12 @@ impl Emulator{
             ($code:block, $last_tick:expr, $freq:expr) => {
                 if current_tick - $last_tick >= 1000/$freq {
                     $code;
+                    $last_tick = current_tick;
+                }
+            };
+            ($code:expr, $last_tick:expr, $freq:expr) => {
+                if current_tick - $last_tick >= 1000/$freq {
+                    $code();
                     $last_tick = current_tick;
                 }
             };
@@ -129,6 +138,8 @@ impl Emulator{
         
         let mut last_opcode_tick = 0u32;
         let mut last_render_tick = 0u32;
+        let mut frozen = false;
+
         'running: loop {
             if let Ok(_) = self.ui_interface.kill_receiver.try_recv() {
                 break 'running;
@@ -140,24 +151,40 @@ impl Emulator{
                 }
             }
             current_tick = timer.ticks();
-
             
-            clocked!({
+            let mut execute_opcodes = ||{
                 let opcode: u16 = (internals.memory[internals.PC as usize] as u16) << 8 | internals.memory[(internals.PC + 1) as usize] as u16;
-                
-                if opcode != 0 {
-                    self.send_state(format!("{:04X}: {:04X}", internals.PC, opcode), &internals);
+               
+                {
+                    let locked = &mut self.ui_interface.inter_thread.lock();
+                    frozen = locked.freeze; // needs to be written to an external variable so timer updates can also be frozen
+                                            // without needing to use locks,
+                    if frozen {
+                        return;
+                    }
+                    Emulator::send_state(locked, format!("{:04X}: {:04X}", internals.PC, opcode), &internals);
+                }
+
+                if opcode != 0 {  
                     internals.PC += 2;
-                }else{
+                } else {
                     internals.PC = 0x200;
                 }
-            }, last_opcode_tick, 1000);
+                if internals.delay_timer == 0 {
+                    internals.delay_timer = 255;
+                }
+            };
+            clocked!(execute_opcodes, last_opcode_tick, 500);
             
-         
-            clocked!({
+            let mut execute_render = || {
+                if !frozen{
+                    internals.delay_timer -= if internals.delay_timer > 0 {1} else {0};
+                    internals.sound_timer -= if internals.sound_timer > 0 {1} else {0};
+                }
                 self.render_graphics(&gbuf);
                 self.ui_interface.egui_ctx.request_repaint();
-            }, last_render_tick, 60);
+            };
+            clocked!(execute_render, last_render_tick, 60);
         }
     }
 

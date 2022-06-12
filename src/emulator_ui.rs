@@ -12,12 +12,13 @@ use crate::emulator;
 struct WindowStates {
     control_panel: bool,
     opcodes_view: bool,
+    internals: bool,
     keybinds: bool,
 }
 
 impl Default for WindowStates {
     fn default() -> Self {
-        Self { control_panel: true, opcodes_view: false, keybinds: false }
+        Self { control_panel: true, opcodes_view: false, internals: false, keybinds: false }
     }
 }
 
@@ -36,6 +37,7 @@ impl Default for UIStates{
 pub struct InterThreadData{
     pub executed_instructions: Vec<String>,
     pub internal_state: emulator::C8,
+    pub freeze: bool,
 }
 
 impl InterThreadData{
@@ -43,6 +45,7 @@ impl InterThreadData{
         Self{
             executed_instructions: vec![],
             internal_state: emulator::C8::default(),
+            freeze: false,
         }
     }
 }
@@ -55,11 +58,11 @@ struct EmulatorInterface {
     emulator_handle: Option<JoinHandle<()>>,
     // Used by emulator to communicate its current state
     inter_thread: Arc<Mutex<InterThreadData>>,
-}   
+}
 
 impl EmulatorInterface{
     /// Returns true if the emulator is currently running
-    fn status(&mut self) -> bool {
+    fn status(&self) -> bool {
         match &self.emulator_handle {
             Some(handle) => !handle.is_finished(),
             None => false
@@ -143,7 +146,8 @@ impl eframe::App for EmulatorUI {
             .show(ctx, |ui|{
                 ui.horizontal(|ui| {
                     EmulatorUI::create_window_toggle(ui, &mut self.window_states.control_panel, "Control Panel");
-                    EmulatorUI::create_window_toggle(ui, &mut self.window_states.opcodes_view, "Opcodes");
+                    EmulatorUI::create_window_toggle(ui, &mut self.window_states.opcodes_view, "Instructions");
+                    EmulatorUI::create_window_toggle(ui, &mut self.window_states.internals, "Internals");
                     EmulatorUI::create_window_toggle(ui, &mut self.window_states.keybinds, "Keybinds");
                 });
             });
@@ -165,9 +169,13 @@ impl eframe::App for EmulatorUI {
                 ui.horizontal(|ui| {
                     ui.label("Status: ");
                     if should_start {
-                        ui.colored_label(egui::Color32::KHAKI, "Inactive");
+                        ui.colored_label(egui::Color32::LIGHT_RED, "Inactive");
                     }else{
-                        ui.colored_label(egui::Color32::GREEN, "Running");
+                        if self.emulator_interface.inter_thread.lock().freeze {
+                            ui.colored_label(egui::Color32::LIGHT_BLUE, "Frozen");
+                        }else{
+                            ui.colored_label(egui::Color32::LIGHT_GREEN, "Running");
+                        }
                     }
                 });
                 // </emulator status>
@@ -183,6 +191,8 @@ impl eframe::App for EmulatorUI {
                     }
                 }
                 // </start stop button>
+                ui.allocate_space(egui::vec2(0f32, 5f32)); // padding
+                ui.checkbox(&mut self.emulator_interface.inter_thread.lock().freeze, "Freeze");
 
                 ui.allocate_space(egui::vec2(60f32, 10f32)); // padding
                 ui.allocate_space(ui.available_size());
@@ -191,20 +201,17 @@ impl eframe::App for EmulatorUI {
 
 
         // <opcodes view>
-        egui::Window::new("Opcodes")
+        egui::Window::new("Instructions")
             .open(&mut self.window_states.opcodes_view)
             .default_pos(egui::pos2(50f32, 40f32))
             .default_size([500.0, 500.0])
             .resizable(false)
             .show(ctx, |ui| { 
-
-                ui.checkbox(&mut self.ui_states.freeze_opcodes, "Freeze"); // pause opcodes viewing 
-
                 // <executed opcodes list>
                 egui::containers::ScrollArea::new([true, true])
                 .max_height(500f32)
                 .show(ui, |ui|{
-                    egui::Grid::new("my_grid")
+                    egui::Grid::new("Opcodes_Grid")
                     .num_columns(1)
                     .spacing([40.0, 4.0])
                     .striped(true)
@@ -226,5 +233,85 @@ impl eframe::App for EmulatorUI {
                 // <executed opcodes list>
             });
         // </opcodes view>
+
+        
+        // <internals>
+        egui::Window::new("Internals")
+            .open(&mut self.window_states.internals)
+            .resizable(false)
+            .default_size([300.0, 500.0])
+            .show(ctx, |ui|{
+                let locked = self.emulator_interface.inter_thread.lock();
+                let internals = &locked.internal_state;
+                
+                let mut internals_color = egui::Color32::LIGHT_RED;
+                if self.emulator_interface.status() {
+                    if locked.freeze {
+                        internals_color = egui::Color32::LIGHT_BLUE;
+                    }else{
+                        internals_color = egui::Color32::LIGHT_GREEN;
+                    }
+                }
+
+                ui.horizontal(|ui| {
+                    ui.vertical(|ui| {
+                        ui.horizontal(|ui|{
+                            ui.colored_label(internals_color, "PC: ");
+                            ui.label(format!("0x{:04X}", internals.PC));
+                        });
+        
+                        ui.horizontal(|ui| {
+                            ui.colored_label(internals_color, "I: ");
+                            ui.label(format!("0x{:04X}", internals.I));
+                        });
+        
+                        egui::Grid::new("V_Grid")
+                            .num_columns(1)
+                            .spacing([0.0, 4.0])
+                            .striped(true)
+                            .show(ui, |ui| {
+                                for (i, v) in internals.V.iter().enumerate() {
+                                    ui.colored_label(internals_color, format!("V{:X}: ", i));
+                                    ui.label(format!("0x{:02X}", v));
+                                    ui.end_row();
+                                }
+                            });
+                    });
+                    ui.allocate_space(egui::Vec2::new(10f32, 0f32));
+                    ui.vertical(|ui| {
+                        ui.horizontal(|ui| {
+                            ui.colored_label(internals_color, "SP: ");
+                            ui.label(format!("0x{:04X}", internals.SP));
+                        });
+
+                        egui::Grid::new("Stack_Grid")
+                            .num_columns(1)
+                            .spacing([0.0, 4.0])
+                            .striped(true)
+                            .show(ui, |ui| {
+                                for (i, v) in internals.stack.iter().enumerate() {
+                                    ui.colored_label(internals_color, format!("+0x{:X}: ", i));
+                                    ui.label(format!("0x{:02X}", v));
+                                    ui.end_row();
+                                }
+                            });
+
+                        ui.allocate_space(egui::Vec2::new(0f32, ui.available_height()));
+                    });
+
+                    ui.vertical(|ui|{
+                        ui.horizontal(|ui|{
+                            ui.colored_label(internals_color, "Delay timer: ");
+                            ui.label(format!("{}", internals.delay_timer));
+                        });
+                        ui.horizontal(|ui|{
+                            ui.colored_label(internals_color, "Sound timer: ");
+                            ui.label(format!("{}", internals.sound_timer));
+                        });
+                    });
+                });
+
+            });
+        // </internals>
     }
 }
