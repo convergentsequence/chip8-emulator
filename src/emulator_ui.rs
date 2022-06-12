@@ -32,16 +32,30 @@ impl Default for UIStates{
     }
 }
 
+/// Data that both threads have access to, used for the emulator to communicate
+/// its current state to the ui thread.
+pub struct InterThreadData{
+    pub executed_instructions: Vec<String>,
+    pub internal_state: emulator::C8,
+}
 
+impl InterThreadData{
+    fn new() -> Self{
+        Self{
+            executed_instructions: vec![],
+            internal_state: emulator::C8::default(),
+        }
+    }
+}
 
 /// Controls and communicates with the emulator thread
 struct EmulatorInterface {
     /// Sender used to close the emulator externally, when any value is sent the emulator closes
     kill_sender: Option<Sender<bool>>, 
-    /// Passed to emulator thread to write all executed opcodes to
-    executed_opcodes: Arc<Mutex<Vec<String>>>,
     /// Handle to emulator thread
     emulator_handle: Option<JoinHandle<()>>,
+    // Used by emulator to communicate its current state
+    inter_thread: Arc<Mutex<InterThreadData>>,
 }   
 
 impl EmulatorInterface{
@@ -69,7 +83,7 @@ impl EmulatorInterface{
 
         let kill_channel = channel();
         self.kill_sender = Some(kill_channel.0);
-        self.emulator_handle = Some(emulator::start_thread(kill_channel.1, self.executed_opcodes.clone(), egui_ctx.clone()));
+        self.emulator_handle = Some(emulator::start_thread(kill_channel.1, egui_ctx.clone(), self.inter_thread.clone()));
     }
     
     fn kill(&mut self){
@@ -87,8 +101,8 @@ impl Default for EmulatorInterface {
     fn default() -> Self {
         Self{
             kill_sender: None,
-            executed_opcodes: Arc::new(Mutex::new(vec![])),
             emulator_handle: None,
+            inter_thread: Arc::new(Mutex::new(InterThreadData::new())),
         }
     }
 } 
@@ -196,9 +210,8 @@ impl eframe::App for EmulatorUI {
                     .spacing([40.0, 4.0])
                     .striped(true)
                     .show(ui, |ui| {
-                        
-                        let vec_mutex = self.emulator_interface.executed_opcodes.lock();
-                        let vec = vec_mutex.deref();
+                        let mut locked = self.emulator_interface.inter_thread.lock();
+                        let vec = &mut locked.executed_instructions;
                         for oc in vec.iter().rev() {
                             ui.horizontal(|ui| {
                                 ui.label(oc);

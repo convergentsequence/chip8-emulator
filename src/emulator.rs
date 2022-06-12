@@ -13,6 +13,8 @@ use sdl2::rect::Point;
 use sdl2::{Sdl, render::Canvas, video::Window};
 use sdl2::render::{RenderTarget};
 
+use crate::emulator_ui::{self, InterThreadData};
+
 const WINDOW_TITLE: &str = "CHIP-8";
 
 struct GraphicsContext<T: RenderTarget>{
@@ -21,6 +23,7 @@ struct GraphicsContext<T: RenderTarget>{
 }
 
 #[allow(non_snake_case, dead_code)]
+#[derive(Clone)]
 pub struct C8 {
     memory: [u8; 4096],
     V: [u8; 16],
@@ -39,22 +42,22 @@ impl Default for C8{
 struct UIInterface{
     kill_receiver: Receiver<bool>,
     target_file: String,
-    opcodes_vec: Arc<Mutex<Vec<String>>>,
     egui_ctx: egui::Context,
+    inter_thread: Arc<Mutex<InterThreadData>>,
 }
 
 /// interfaces the ui
 impl UIInterface{
     fn new( kill_receiver: Receiver<bool>, 
             target_file: String, 
-            opcodes_vec: Arc<Mutex<Vec<String>>>, 
-            egui_ctx: egui::Context) -> Self
+            egui_ctx: egui::Context,
+            inter_thread: Arc<Mutex<InterThreadData>>) -> Self
     {
         Self { 
             kill_receiver, 
             target_file, 
-            opcodes_vec,
             egui_ctx,
+            inter_thread,
         }
     }
 }
@@ -82,20 +85,20 @@ impl Emulator{
         GraphicsContext{ sdl_ctx: sdl_ctx, canvas: canvas }
     }
 
-    fn new(kill_receiver: Receiver<bool>, target_file: String, opcode_vec: Arc<Mutex<Vec<String>>>, egui_ctx: egui::Context) -> Emulator {
+    fn new(kill_receiver: Receiver<bool>, target_file: String, egui_ctx: egui::Context, inter_thread: Arc<Mutex<InterThreadData>>) -> Emulator {
         Emulator { 
-            ui_interface: UIInterface::new(kill_receiver, target_file, opcode_vec, egui_ctx),
+            ui_interface: UIInterface::new(kill_receiver, target_file, egui_ctx, inter_thread),
             context: Emulator::init_context(),
         }
     }
 
-    fn send_opcode(&mut self, value: String) {
-        let mut locked = self.ui_interface.opcodes_vec.lock();
-        let vec = locked.deref_mut();
-        vec.push(value);
-        if vec.len() > 100 {
-            vec.remove(0);
+    fn send_state(&mut self, opcode: String, internal_state: &C8) {
+        let mut locked = self.ui_interface.inter_thread.lock();
+        locked.executed_instructions.push(opcode);
+        if locked.executed_instructions.len() > 100 {
+            locked.executed_instructions.remove(0);
         }
+        locked.internal_state.clone_from(internal_state);
     }
 
     fn start(&mut self){
@@ -144,7 +147,7 @@ impl Emulator{
                 let opcode: u16 = (internals.memory[internals.PC as usize] as u16) << 8 | internals.memory[(internals.PC + 1) as usize] as u16;
                 
                 if opcode != 0 {
-                    self.send_opcode(format!("{:04X}: {:04X}",internals.PC, opcode));
+                    self.send_state(format!("{:04X}: {:04X}",internals.PC, opcode));
                     internals.PC += 2;
                 }else{
                     internals.PC = 0x200;
@@ -176,9 +179,9 @@ impl Emulator{
 }
 
 
-pub fn start_thread(kill_receiver: Receiver<bool>, opcode_vec: Arc<Mutex<Vec<String>>>, egui_ctx: egui::Context) -> thread::JoinHandle<()>{
+pub fn start_thread(kill_receiver: Receiver<bool>, egui_ctx: egui::Context, inter_thread: Arc<Mutex<InterThreadData>>) -> thread::JoinHandle<()>{
     thread::spawn(move || {
-        let mut emulator = Emulator::new(kill_receiver, (r"C:\C8Games\Connect_4.ch8").to_owned(), opcode_vec, egui_ctx);
+        let mut emulator = Emulator::new(kill_receiver, (r"C:\C8Games\Connect_4.ch8").to_owned(), egui_ctx, inter_thread);
         emulator.start();
     })
 }
