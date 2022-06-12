@@ -1,4 +1,4 @@
-use egui::{Ui, style};
+use egui::{Ui};
 use egui::mutex::Mutex;
 use core::panic;
 use std::sync::Arc;
@@ -333,13 +333,13 @@ impl eframe::App for EmulatorUI {
                             .striped(true)
                             .show(ui, |ui| {
                                 let start_point = 3840 - self.ui_states.memory_slider;
-                                let mut line: String = "".to_owned();
+                                let mut line: String = format!("{:04X}: ", start_point);
                                 let mem_area = &internals.memory[start_point as usize..(start_point + 16*16) as usize];
                                 for (i, byte) in mem_area.iter().enumerate() {
                                     if i % 16 == 0 && i != 0{
                                         ui.monospace(&mut line);
                                         ui.end_row();
-                                        line.clear();
+                                        line = format!("{:04X}: ", start_point + (i as i32 / 16) * 16);
                                     }
                                     line.push_str(&format!(" {:02X}", byte));
                                 }
