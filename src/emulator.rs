@@ -1,10 +1,13 @@
 #![allow(arithmetic_overflow)]
 
-use std::io::{Read, IntoInnerError};
+
+use std::io::{Read};
 use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 use std::{thread, usize};
 use std::fs::File;
+
+use rand::Rng;
 
 use egui::mutex::{Mutex, MutexGuard};
 use sdl2::event::Event;
@@ -134,9 +137,6 @@ impl Emulator{
         }
 
         let mut gbuf = [0u8; 64*32];
-
-        gbuf[64+20] = 1;
-        gbuf[69+420] = 1;
         
         let fontset: [u8; 80] = [
             0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
@@ -175,6 +175,13 @@ impl Emulator{
             current_tick = timer.ticks();
             
             let mut execute_opcodes = ||{
+                let locked = &mut self.ui_interface.inter_thread.lock();
+                frozen = locked.freeze; // needs to be written to an external variable so timer updates can also be frozen
+                                        // without needing to use locks,
+                if frozen {
+                    return;
+                }
+
                 let opcode: u16 = (internals.memory[internals.PC as usize] as u16) << 8 | internals.memory[(internals.PC + 1) as usize] as u16;
                
                 let old_pc = internals.PC;
@@ -281,24 +288,87 @@ impl Emulator{
                                 let x = ((opcode & 0xF00) >> 8) as usize;
                                 let y = ((opcode & 0xF0) >> 4) as usize;
                                 opcode_description = format!("Subtract V{:X} from V{:X} and store the borrow in VF" ,y ,x);
-                                internals.V[0xF] = if internals.V[x] >= internals.V[y] {1} else {0};
+                                internals.V[0xF] = if internals.V[x] > internals.V[y] {1} else {0};
                                 internals.V[x] -= internals.V[y];
                             },
+                            6 => { // 0x8X06 - Shift VX to right, first bit goes to V[15]
+                                let x = ((opcode & 0xF00) >> 8) as usize;
+                                opcode_description = format!("Shift V{:X} to the right least significant bit goes to VF",x);
+                                internals.V[0xF] = internals.V[x] & 1;
+                                internals.V[x] >>= 1;
+                            },
+                            7 => { // 0x8XY7 - Subtract VX from VY result stored in VX and store the borrow in V15
+                                let x = ((opcode & 0xF00) >> 8) as usize;
+                                let y = ((opcode & 0xF0) >> 4) as usize;
+                                opcode_description = format!("Subtract V{:X} from V{:X} store the result to V{:X} and store the borrow in VF" ,x ,y, x);
+                                internals.V[0xF] = if internals.V[x] > internals.V[y] {1} else {0};
+                                internals.V[x] = internals.V[y] - internals.V[x];
+                            },
+                            0xE => { // 0x8X0E - Shift VX to left,most significant bit goes to V15
+                                let x = ((opcode & 0xF00) >> 8) as usize;
+                                opcode_description = format!("Shift V{:X} to the left most significant bit goes to VF",x);
+                                internals.V[0xF] = internals.V[x] >> 7;
+                                internals.V[x] <<= 1;
+                            },
                             _ => {}
+                        }
+                    },
+                    0xA => { // 0xANNN - Put NNN into I
+                        let nnn = opcode & 0xFFF;
+                        opcode_description = format!("Put 0x{:03X} into I", nnn);
+                        internals.I = nnn;
+                    },
+                    0xB => {  // 0xBNNN - Jump to address NNN plus register V0
+                        let nnn = opcode & 0xFFF;
+                        opcode_description = format!("Jump to I + 0x{:03X}", nnn);
+                        internals.PC = nnn + internals.I;
+                    },
+                    0xC => { // 0xCXKK - Set VX to (random number between 0 - 255) & KK
+                        let x = ((opcode & 0xF00) >> 8) as usize;
+                        let kk= (opcode & 0xFF) as u8;
+                        let rnd = rand::thread_rng().gen_range(0..=255) as u8;
+                        opcode_description = format!("Set V{:X} to random number in [0,255] & 0x{:02X}", x, kk);
+                        internals.V[x] = rnd & kk;
+                    },  
+                    /*
+                    *
+                    *	Dxyn - DRW Vx, Vy, nibble
+                    *	Display n-byte sprite starting at memory location I at (Vx, Vy), set VF = collision.
+                    *	The interpreter reads n bytes from memory, starting at the address stored in I. These bytes are then displayed as sprites on screen at coordinates (Vx, Vy). Sprites are XORed onto the existing screen.
+                    *	If this causes any pixels to be erased, VF is set to 1, otherwise it is set to 0. If the sprite is positioned so part of it is outside the coordinates of the display, 
+                    *	it wraps around to the opposite side of the screen.
+                    *	
+                    *	A sprite is 8 bits of length and n bits of height
+                    *
+                    */
+                    0xD => {
+                        let x = ((opcode & 0xF00) >> 8) as usize;
+                        let y = ((opcode & 0xF0) >> 4) as usize;
+                        let n = opcode & 0xF;
+                        let sx = internals.V[x] as usize;
+                        let sy = internals.V[y] as usize;
+
+                        opcode_description = format!("Draw sprite at {}, {} with length {}", sx,sy,n);
+
+                        internals.V[0xF] = 0;
+
+                        for i in 0..n as usize {
+                            let pixel = internals.memory[internals.I as usize + i as usize];
+                            for j in 0..8usize {
+                                if pixel & (0b10000000 >> j) > 0 {
+                                    internals.V[0xF] = internals.V[0xF].max(gbuf[(j+sx)%64 + ((i+sy)%32)*64]);
+                                    gbuf[(j+sx)%64 + ((i+sy)%32)*64] ^= 1;
+                                }
+                            }
                         }
                     },
                     _ => {}
                 }
 
-                {
-                    let locked = &mut self.ui_interface.inter_thread.lock();
-                    frozen = locked.freeze; // needs to be written to an external variable so timer updates can also be frozen
-                                            // without needing to use locks,
-                    if frozen {
-                        return;
-                    }
-                    Emulator::send_state(locked, format!("{:04X}: {:04X} - {}", old_pc, opcode, opcode_description), &internals);
-                }
+                
+                    
+                Emulator::send_state(locked, format!("{:04X}: {:04X} - {}", old_pc, opcode, opcode_description), &internals);
+                
 
             };
             clocked!(execute_opcodes, last_opcode_tick, 500);

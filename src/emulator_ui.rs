@@ -283,7 +283,7 @@ impl eframe::App for EmulatorUI {
                     ui.vertical(|ui| {
                         ui.horizontal(|ui| {
                             ui.colored_label(internals_color, "SP: ");
-                            ui.label(format!("{}", internals.SP));
+                            ui.label(format!("0x{:X}", internals.SP));
                         });
 
                         egui::Grid::new("Stack_Grid")
@@ -332,6 +332,8 @@ impl eframe::App for EmulatorUI {
                             //.spacing([40.0, 4.0])
                             .striped(true)
                             .show(ui, |ui| {
+                                ui.monospace("       +0 +1 +2 +3 +4 +5 +6 +7 +8 +9 +A +B +C +D +E +F");
+                                ui.end_row();
                                 let start_point = 3840 - self.ui_states.memory_slider;
                                 let mut line: String = format!("{:04X}: ", start_point);
                                 let mem_area = &internals.memory[start_point as usize..(start_point + 16*16) as usize];
