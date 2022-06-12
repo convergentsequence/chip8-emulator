@@ -37,11 +37,12 @@ pub struct C8 {
     pub SP: usize,
     pub delay_timer: u8,
     pub sound_timer: u8,
+    endloop: bool
 }
 
 impl Default for C8{
     fn default() -> Self {
-        Self { memory: [0; 4096], V: [0; 16], I: 0, PC: 0x200, stack: [0; 16], SP: 1, delay_timer: 0, sound_timer: 0 }
+        Self { memory: [0; 4096], V: [0; 16], I: 0, PC: 0x200, stack: [0; 16], SP: 1, delay_timer: 0, sound_timer: 0, endloop: false }
     }
 }
 //#[allow(dead_code)]
@@ -101,6 +102,9 @@ impl Emulator{
     }
     
     fn send_state(locked: &mut MutexGuard<InterThreadData>, opcode: String, internal_state: &C8) {
+        if internal_state.endloop && &opcode == locked.executed_instructions.last().unwrap(){
+            return;
+        }
         locked.executed_instructions.push(opcode);
         if locked.executed_instructions.len() > 100 {
             locked.executed_instructions.remove(0);
@@ -206,8 +210,14 @@ impl Emulator{
                     },
                     1 => { // 0x1NNN - jump to location NNN
                         let nnn = opcode & 0xFFF;
-                        opcode_description = format!("Jumping to location 0x{:03X}", nnn);
-                        internals.PC = opcode & nnn;
+                        if internals.PC - 2 == nnn {
+                            opcode_description = format!("Endloop");
+                            internals.endloop = true;
+                        }else{
+                            opcode_description = format!("Jumping to location 0x{:03X}", nnn);
+                        }
+                        
+                        internals.PC = nnn;
                     },
                     2 => { // 0x2NNN - jump to subroutine at address NNN
                         let nnn = opcode & 0xFFF;
