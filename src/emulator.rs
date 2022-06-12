@@ -147,7 +147,7 @@ impl Emulator{
                 let opcode: u16 = (internals.memory[internals.PC as usize] as u16) << 8 | internals.memory[(internals.PC + 1) as usize] as u16;
                 
                 if opcode != 0 {
-                    self.send_state(format!("{:04X}: {:04X}",internals.PC, opcode));
+                    self.send_state(format!("{:04X}: {:04X}", internals.PC, opcode), &internals);
                     internals.PC += 2;
                 }else{
                     internals.PC = 0x200;
