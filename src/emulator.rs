@@ -249,7 +249,7 @@ impl Emulator{
                         let x = ((opcode & 0xF00) >> 8) as usize;
                         let rr = (opcode & 0xFF) as u8;
                         opcode_description = format!("Adding 0x{:02X} to V{:X}", rr, x);
-                        internals.V[x] += rr;
+                        internals.V[x] = internals.V[x].wrapping_add(rr);
                     },
                     8 => {
                         match opcode & 0xF {
@@ -285,14 +285,14 @@ impl Emulator{
                                 let y = ((opcode & 0xF0) >> 4) as usize;
                                 opcode_description = format!("Add V{:X} to V{:X} and store carry in VF", y, x);
                                 internals.V[0xF] = if internals.V[x] as i32 + internals.V[y] as i32 > 255 {1} else {0};
-                                internals.V[x] += internals.V[y];
+                                internals.V[x] = internals.V[x].wrapping_add(internals.V[y]);
                             },
                             5 => { // 0x8XY5 - Subtract VY from VX and store the borrow in V15
                                 let x = ((opcode & 0xF00) >> 8) as usize;
                                 let y = ((opcode & 0xF0) >> 4) as usize;
                                 opcode_description = format!("Subtract V{:X} from V{:X} and store the borrow in VF" ,y ,x);
                                 internals.V[0xF] = if internals.V[x] > internals.V[y] {1} else {0};
-                                internals.V[x] -= internals.V[y];
+                                internals.V[x] = internals.V[x].wrapping_sub(internals.V[y]);
                             },
                             6 => { // 0x8X06 - Shift VX to right, first bit goes to V[15]
                                 let x = ((opcode & 0xF00) >> 8) as usize;
