@@ -1,7 +1,9 @@
-use std::io::Read;
+#![allow(arithmetic_overflow)]
+
+use std::io::{Read, IntoInnerError};
 use std::sync::Arc;
 use std::sync::mpsc::Receiver;
-use std::thread;
+use std::{thread, usize};
 use std::fs::File;
 
 use egui::mutex::{Mutex, MutexGuard};
@@ -29,14 +31,14 @@ pub struct C8 {
     pub I: u16,
     pub PC: u16,
     pub stack: [u16; 16],
-    pub SP: u8,
+    pub SP: usize,
     pub delay_timer: u8,
     pub sound_timer: u8,
 }
 
 impl Default for C8{
     fn default() -> Self {
-        Self { memory: [0; 4096], V: [0; 16], I: 0, PC: 0x200, stack: [0; 16], SP: 0, delay_timer: 0, sound_timer: 0 }
+        Self { memory: [0; 4096], V: [0; 16], I: 0, PC: 0x200, stack: [0; 16], SP: 1, delay_timer: 0, sound_timer: 0 }
     }
 }
 //#[allow(dead_code)]
@@ -136,6 +138,26 @@ impl Emulator{
         gbuf[64+20] = 1;
         gbuf[69+420] = 1;
         
+        let fontset: [u8; 80] = [
+            0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
+            0x20, 0x60, 0x20, 0x20, 0x70, // 1
+            0xF0, 0x10, 0xF0, 0x80, 0xF0, // 2
+            0xF0, 0x10, 0xF0, 0x10, 0xF0, // 3
+            0x90, 0x90, 0xF0, 0x10, 0x10, // 4
+            0xF0, 0x80, 0xF0, 0x10, 0xF0, // 5
+            0xF0, 0x80, 0xF0, 0x90, 0xF0, // 6
+            0xF0, 0x10, 0x20, 0x40, 0x40, // 7
+            0xF0, 0x90, 0xF0, 0x90, 0xF0, // 8
+            0xF0, 0x90, 0xF0, 0x10, 0xF0, // 9
+            0xF0, 0x90, 0xF0, 0x90, 0x90, // A
+            0xE0, 0x90, 0xE0, 0x90, 0xE0, // B
+            0xF0, 0x80, 0x80, 0x80, 0xF0, // C
+            0xE0, 0x90, 0x90, 0x90, 0xE0, // D
+            0xF0, 0x80, 0xF0, 0x80, 0xF0, // E
+            0xF0, 0x80, 0xF0, 0x80, 0x80  // F
+        ];
+        internals.memory[0..80].clone_from_slice(&fontset);
+
         let mut last_opcode_tick = 0u32;
         let mut last_render_tick = 0u32;
         let mut frozen = false;
@@ -155,6 +177,119 @@ impl Emulator{
             let mut execute_opcodes = ||{
                 let opcode: u16 = (internals.memory[internals.PC as usize] as u16) << 8 | internals.memory[(internals.PC + 1) as usize] as u16;
                
+                let old_pc = internals.PC;
+                internals.PC += 2;
+
+                let mut opcode_description: String = "Unknown/unimplemented instruction".to_owned();
+
+                match opcode >> 12 {
+                    0 => {
+                        match opcode & 0xFF {
+                            0xE0 => { // 0x00E0 - clear the screen
+                                opcode_description = "Clearing screen".to_owned();
+                                gbuf.clone_from(&[0; 64*32]);
+                            },
+                            0xEE => { // 0x00EE - return from subroutine call
+                                opcode_description = format!("Reuturning from subroutine to: 0x{:03X}", internals.stack[internals.SP - 1]);
+                                internals.SP -= 1;
+                                internals.PC = internals.stack[internals.SP];
+                            },
+                            _ => {}
+                        }
+                    },
+                    1 => { // 0x1NNN - jump to location NNN
+                        let nnn = opcode & 0xFFF;
+                        opcode_description = format!("Jumping to location 0x{:03X}", nnn);
+                        internals.PC = opcode & nnn;
+                    },
+                    2 => { // 0x2NNN - jump to subroutine at address NNN
+                        let nnn = opcode & 0xFFF;
+                        internals.stack[internals.SP] = internals.PC;
+                        internals.SP += 1;
+                        internals.PC = nnn;
+                    },
+                    3 => { // 0x3XRR - skip next instruction if V[X] == 0xRR 
+                        let x = (opcode & 0xF00) >> 8;
+                        let rr = (opcode & 0xFF) as u8;
+                        opcode_description = format!("Skipping next instruction if V{:X}(0x{:02X}) == 0x{:02X}",x,internals.V[x as usize], rr);
+                        if internals.V[x as usize] == rr {
+                            internals.PC += 2;
+                        }
+                    },
+                    4 => { // 0x4XRR - skip next intruction if V[X] != 0xRR
+                        let x = (opcode & 0xF00) >> 8;
+                        let rr = (opcode & 0xFF) as u8;
+                        opcode_description = format!("Skipping next instruction if V{:X}(0x{:02X}) != 0x{:02X}",x,internals.V[x as usize], rr);
+                        if internals.V[x as usize] != rr {
+                            internals.PC += 2;
+                        }
+                    },
+                    5 => { // 0x5XY0 - skip next instruction if V[X] == V[Y]
+                        let x = ((opcode & 0xF00) >> 8) as usize;
+                        let y = ((opcode & 0xF0) >> 4) as usize;
+                        opcode_description = format!("Skipping next instruction if V{:X}(0x{:02X}) == V{:X}(0x{:02X})", x, internals.V[x], y, internals.V[y]);
+                        if internals.V[x] == internals.V[y] {
+                            internals.PC += 2;
+                        }
+                    },
+                    6 => { // 0x6XRR - move constant RR into V[X]
+                        let x = ((opcode & 0xF00) >> 8) as usize;
+                        let rr = (opcode & 0xFF) as u8;
+                        opcode_description = format!("Moving 0x{:02X} into V{:X}", rr, x);
+                        internals.V[x] = rr;
+                    },
+                    7 => { // 0x7XRR - add RR to value of V[X]
+                        let x = ((opcode & 0xF00) >> 8) as usize;
+                        let rr = (opcode & 0xFF) as u8;
+                        opcode_description = format!("Adding 0x{:02X} to V{:X}", rr, x);
+                        internals.V[x] += rr;
+                    },
+                    8 => {
+                        match opcode & 0xF {
+                            0 => { // 0x8XY0 - move register VY to register VX
+                                let x = ((opcode & 0xF00) >> 8) as usize;
+                                let y = ((opcode & 0xF0) >> 4) as usize;
+                                opcode_description = format!("Moving V{:X} into V{:X}", y, x);
+                                internals.V[x] = internals.V[y];
+                            }
+                            1 => { // 0x8XY1 - stores the value of VX | VY into VX
+                                let x = ((opcode & 0xF00) >> 8) as usize;
+                                let y = ((opcode & 0xF0) >> 4) as usize;
+                                opcode_description = format!("Adding V{:X}to V{:X} OR V{:X})",x,x,y);
+                                internals.V[x] |= internals.V[y];
+                            },
+                            2 => { // 0x8XY2 - add value of VY to VX
+                                let x = ((opcode & 0xF00) >> 8) as usize;
+                                let y = ((opcode & 0xF0) >> 4) as usize;
+                                opcode_description = format!("Adding V{:X} to V{:X}", y, x);
+                                internals.V[x] += internals.V[y];
+                            },
+                            3 => { // 0x8XY3 - XOR VY and X store in VX
+                                let x = ((opcode & 0xF00) >> 8) as usize;
+                                let y = ((opcode & 0xF0) >> 4) as usize;
+                                opcode_description = format!("Set V{:X} to V{:X} XOR V{:X}", x, x, y);
+                                internals.V[x] ^= internals.V[y];
+                            },
+                            4 => { // 0x8XY4 - Add VY to VX store carry in V15
+                                let x = ((opcode & 0xF00) >> 8) as usize;
+                                let y = ((opcode & 0xF0) >> 4) as usize;
+                                opcode_description = format!("Add V{:X} to V{:X} and store carry in VF", y, x);
+                                internals.V[0xF] = if internals.V[x] as i32 + internals.V[y] as i32 > 255 {1} else {0};
+                                internals.V[x] += internals.V[y];
+                            },
+                            5 => { // 0x8XY5 - Subtract VY from VX and store the borrow in V15
+                                let x = ((opcode & 0xF00) >> 8) as usize;
+                                let y = ((opcode & 0xF0) >> 4) as usize;
+                                opcode_description = format!("Subtract V{:X} from V{:X} and store the borrow in VF" ,y ,x);
+                                internals.V[0xF] = if internals.V[x] >= internals.V[y] {1} else {0};
+                                internals.V[x] -= internals.V[y];
+                            },
+                            _ => {}
+                        }
+                    },
+                    _ => {}
+                }
+
                 {
                     let locked = &mut self.ui_interface.inter_thread.lock();
                     frozen = locked.freeze; // needs to be written to an external variable so timer updates can also be frozen
@@ -162,17 +297,9 @@ impl Emulator{
                     if frozen {
                         return;
                     }
-                    Emulator::send_state(locked, format!("{:04X}: {:04X}", internals.PC, opcode), &internals);
+                    Emulator::send_state(locked, format!("{:04X}: {:04X} - {}", old_pc, opcode, opcode_description), &internals);
                 }
 
-                if opcode != 0 {  
-                    internals.PC += 2;
-                } else {
-                    internals.PC = 0x200;
-                }
-                if internals.delay_timer == 0 {
-                    internals.delay_timer = 255;
-                }
             };
             clocked!(execute_opcodes, last_opcode_tick, 500);
             

@@ -283,7 +283,7 @@ impl eframe::App for EmulatorUI {
                     ui.vertical(|ui| {
                         ui.horizontal(|ui| {
                             ui.colored_label(internals_color, "SP: ");
-                            ui.label(format!("0x{:04X}", internals.SP));
+                            ui.label(format!("{}", internals.SP));
                         });
 
                         egui::Grid::new("Stack_Grid")
@@ -304,11 +304,11 @@ impl eframe::App for EmulatorUI {
                     ui.vertical(|ui|{
                         ui.horizontal(|ui|{
                             ui.colored_label(internals_color, "Delay timer: ");
-                            ui.label(format!("{}", internals.delay_timer));
+                            ui.label(format!("{:03}", internals.delay_timer));
                         });
                         ui.horizontal(|ui|{
                             ui.colored_label(internals_color, "Sound timer: ");
-                            ui.label(format!("{}", internals.sound_timer));
+                            ui.label(format!("{:03}", internals.sound_timer));
                         });
                     });
                 });
