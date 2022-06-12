@@ -1,5 +1,4 @@
 use std::io::Read;
-use std::ops::DerefMut;
 use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 use std::thread;
@@ -13,7 +12,7 @@ use sdl2::rect::Point;
 use sdl2::{Sdl, render::Canvas, video::Window};
 use sdl2::render::{RenderTarget};
 
-use crate::emulator_ui::{self, InterThreadData};
+use crate::emulator_ui::InterThreadData;
 
 const WINDOW_TITLE: &str = "CHIP-8";
 

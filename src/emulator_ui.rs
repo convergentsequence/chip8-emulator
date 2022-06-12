@@ -1,7 +1,6 @@
 use egui::Ui;
 use egui::mutex::Mutex;
 use core::panic;
-use std::ops::Deref;
 use std::sync::Arc;
 use std::sync::mpsc::channel;
 use std::sync::mpsc::{Sender};
