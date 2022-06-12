@@ -1,4 +1,4 @@
-use egui::Ui;
+use egui::{Ui, style};
 use egui::mutex::Mutex;
 use core::panic;
 use std::sync::Arc;
@@ -13,22 +13,23 @@ struct WindowStates {
     control_panel: bool,
     opcodes_view: bool,
     internals: bool,
+    memory: bool,
     keybinds: bool,
 }
 
 impl Default for WindowStates {
     fn default() -> Self {
-        Self { control_panel: true, opcodes_view: false, internals: false, keybinds: false }
+        Self { control_panel: true, opcodes_view: false, internals: false, memory: false, keybinds: false }
     }
 }
 
 struct UIStates {
-    freeze_opcodes: bool
+    memory_slider: i32,
 }
 
 impl Default for UIStates{
     fn default() -> Self {
-        Self { freeze_opcodes: false, }
+        Self { memory_slider: 3840, }
     }
 }
 
@@ -148,6 +149,7 @@ impl eframe::App for EmulatorUI {
                     EmulatorUI::create_window_toggle(ui, &mut self.window_states.control_panel, "Control Panel");
                     EmulatorUI::create_window_toggle(ui, &mut self.window_states.opcodes_view, "Instructions");
                     EmulatorUI::create_window_toggle(ui, &mut self.window_states.internals, "Internals");
+                    EmulatorUI::create_window_toggle(ui, &mut self.window_states.memory, "Memory");
                     EmulatorUI::create_window_toggle(ui, &mut self.window_states.keybinds, "Keybinds");
                 });
             });
@@ -313,5 +315,72 @@ impl eframe::App for EmulatorUI {
 
             });
         // </internals>
+
+        // <memory>
+        let memory_window = egui::Window::new("Memory")
+            .open(&mut self.window_states.memory)
+            .default_pos(egui::pos2(50f32, 40f32))
+            .default_size([500.0, 500.0])
+            .resizable(false)
+            .show(ctx, |ui| {
+                let locked = self.emulator_interface.inter_thread.lock();
+                let internals = &locked.internal_state;
+                ui.horizontal(|ui| {
+                    ui.vertical(|ui| {
+                        egui::Grid::new("Memory_Grid")
+                            .num_columns(1)
+                            //.spacing([40.0, 4.0])
+                            .striped(true)
+                            .show(ui, |ui| {
+                                let start_point = 3840 - self.ui_states.memory_slider;
+                                let mut line: String = "".to_owned();
+                                let mem_area = &internals.memory[start_point as usize..(start_point + 16*16) as usize];
+                                for (i, byte) in mem_area.iter().enumerate() {
+                                    if i % 16 == 0 && i != 0{
+                                        ui.monospace(&mut line);
+                                        ui.end_row();
+                                        line.clear();
+                                    }
+                                    line.push_str(&format!(" {:02X}", byte));
+                                }
+                            });
+                    });
+
+                    ui.vertical(|ui| {
+                        let mut style = ctx.style().as_ref().clone();
+                        style.spacing.slider_width = 330f32;
+                        ctx.set_style(style);
+
+                        ui.add_sized(
+                            ui.available_size(),
+                            egui::Slider::new(&mut self.ui_states.memory_slider, 0..=3840 )
+                            .vertical()
+                            .show_value(false)
+                            .step_by(16f64),
+                        );
+                        ui.allocate_space(egui::Vec2::new(0.0, ui.available_height()));
+                    });
+                    
+                });
+
+                //ui.allocate_space(ui.available_size());
+            });
+            match memory_window {
+                Some(window) => {
+                    if window.response.hovered() {
+                        let events = &ctx.input().events;
+                        for event in events.iter() {
+                            if let egui::Event::Scroll(scroll) = event {
+                                let direction = (scroll[1] / scroll[1].abs()) as i32; 
+                                self.ui_states.memory_slider += direction * 16;
+                                self.ui_states.memory_slider = self.ui_states.memory_slider.clamp(0, 3840);
+                            }
+                        }
+                    }
+                },
+                None => {},
+            }
+  
+        // </memory>
     }
 }
