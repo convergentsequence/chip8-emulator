@@ -264,18 +264,21 @@ impl Emulator{
                                 let y = ((opcode & 0xF0) >> 4) as usize;
                                 opcode_description = format!("Adding V{:X}to V{:X} OR V{:X})",x,x,y);
                                 internals.V[x] |= internals.V[y];
+                                internals.V[0xF] = 0;
                             },
                             2 => { // 0x8XY2 - add value of VY to VX
                                 let x = ((opcode & 0xF00) >> 8) as usize;
                                 let y = ((opcode & 0xF0) >> 4) as usize;
-                                opcode_description = format!("Adding V{:X} to V{:X}", y, x);
-                                internals.V[x] += internals.V[y];
+                                opcode_description = format!("Set V{:X} to V{:X} AND V{:X}", x, x, y);
+                                internals.V[x] &= internals.V[y];
+                                internals.V[0xF] = 0;
                             },
                             3 => { // 0x8XY3 - XOR VY and X store in VX
                                 let x = ((opcode & 0xF00) >> 8) as usize;
                                 let y = ((opcode & 0xF0) >> 4) as usize;
                                 opcode_description = format!("Set V{:X} to V{:X} XOR V{:X}", x, x, y);
                                 internals.V[x] ^= internals.V[y];
+                                internals.V[0xF] = 0;
                             },
                             4 => { // 0x8XY4 - Add VY to VX store carry in V15
                                 let x = ((opcode & 0xF00) >> 8) as usize;
@@ -404,7 +407,7 @@ impl Emulator{
 
 pub fn start_thread(kill_receiver: Receiver<bool>, egui_ctx: egui::Context, inter_thread: Arc<Mutex<InterThreadData>>) -> thread::JoinHandle<()>{
     thread::spawn(move || {
-        let mut emulator = Emulator::new(kill_receiver, (r"C:\C8Games\Connect_4.ch8").to_owned(), egui_ctx, inter_thread);
+        let mut emulator = Emulator::new(kill_receiver, (r"C:\C8Games\test_opcode.ch8").to_owned(), egui_ctx, inter_thread);
         emulator.start();
     })
 }
