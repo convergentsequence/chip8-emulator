@@ -13,13 +13,26 @@ use crate::emulator;
 struct WindowStates {
     control_panel: bool,
     opcodes_view: bool,
+    keybinds: bool,
 }
 
 impl Default for WindowStates {
     fn default() -> Self {
-        Self { control_panel: true, opcodes_view: false }
+        Self { control_panel: true, opcodes_view: false, keybinds: false }
     }
 }
+
+struct UIStates {
+    freeze_opcodes: bool
+}
+
+impl Default for UIStates{
+    fn default() -> Self {
+        Self { freeze_opcodes: false, }
+    }
+}
+
+
 
 /// Controls and communicates with the emulator thread
 struct EmulatorInterface {
@@ -83,6 +96,7 @@ impl Default for EmulatorInterface {
 /// Renders the actual ui
 pub struct EmulatorUI {
     window_states: WindowStates,
+    ui_states: UIStates,
     emulator_interface: EmulatorInterface
 }
 
@@ -100,6 +114,7 @@ impl Default for EmulatorUI {
     fn default() -> Self {
         Self { 
             window_states: WindowStates::default(),
+            ui_states: UIStates::default(),
             emulator_interface: EmulatorInterface::default(),
         }
     }
@@ -115,7 +130,8 @@ impl eframe::App for EmulatorUI {
             .show(ctx, |ui|{
                 ui.horizontal(|ui| {
                     EmulatorUI::create_window_toggle(ui, &mut self.window_states.control_panel, "Control Panel");
-                    EmulatorUI::create_window_toggle(ui, &mut self.window_states.opcodes_view, "View Opcodes");
+                    EmulatorUI::create_window_toggle(ui, &mut self.window_states.opcodes_view, "Opcodes");
+                    EmulatorUI::create_window_toggle(ui, &mut self.window_states.keybinds, "Keybinds");
                 });
             });
         // </background and menu bar>
@@ -130,8 +146,22 @@ impl eframe::App for EmulatorUI {
 
                 ui.allocate_space(egui::vec2(0f32, 5f32)); // padding
 
-                // <start stop button>
                 let should_start = !self.emulator_interface.status();
+
+                // <emulator status>
+                ui.horizontal(|ui| {
+                    ui.label("Status: ");
+                    if should_start {
+                        ui.colored_label(egui::Color32::KHAKI, "Inactive");
+                    }else{
+                        ui.colored_label(egui::Color32::GREEN, "Running");
+                    }
+                });
+                // </emulator status>
+
+                ui.allocate_space(egui::vec2(0f32, 5f32)); // padding
+
+                // <start stop button>
                 if ui.button(if should_start {"Start Emulator"} else {"Stop Emulator"}).clicked() {
                     if should_start{
                         self.emulator_interface.start(&ctx);
@@ -153,7 +183,11 @@ impl eframe::App for EmulatorUI {
             .default_pos(egui::pos2(50f32, 40f32))
             .default_size([500.0, 500.0])
             .resizable(false)
-            .show(ctx, |ui| {
+            .show(ctx, |ui| { 
+
+                ui.checkbox(&mut self.ui_states.freeze_opcodes, "Freeze"); // pause opcodes viewing 
+
+                // <executed opcodes list>
                 egui::containers::ScrollArea::new([true, true])
                 .max_height(500f32)
                 .show(ui, |ui|{
@@ -162,20 +196,22 @@ impl eframe::App for EmulatorUI {
                     .spacing([40.0, 4.0])
                     .striped(true)
                     .show(ui, |ui| {
-                        {
-                            let vec_mutex = self.emulator_interface.executed_opcodes.lock();
-                            let vec = vec_mutex.deref();
-                            for oc in vec.iter().rev() {
-                                ui.horizontal(|ui| {
-                                    ui.label(oc);
-                                    ui.allocate_space(egui::Vec2::new(ui.available_width(), 0f32));
-                                });
-                                ui.end_row();
-                            }
+                        
+                        let vec_mutex = self.emulator_interface.executed_opcodes.lock();
+                        let vec = vec_mutex.deref();
+                        for oc in vec.iter().rev() {
+                            ui.horizontal(|ui| {
+                                ui.label(oc);
+                                ui.allocate_space(egui::Vec2::new(ui.available_width(), 0f32));
+                            });
+                            ui.end_row();
                         }
+                        
                     });
+
+                    ui.allocate_space(ui.available_size()); // allocate space when the list is empty
                 });
-                ui.allocate_space(ui.available_size());
+                // <executed opcodes list>
             });
         // </opcodes view>
     }

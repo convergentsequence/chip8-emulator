@@ -15,13 +15,13 @@ use sdl2::render::{RenderTarget};
 
 const WINDOW_TITLE: &str = "CHIP-8";
 
-struct EmulatorContext<T: RenderTarget>{
+struct GraphicsContext<T: RenderTarget>{
     sdl_ctx: Sdl,
     canvas: Canvas<T>,
 }
 
 #[allow(non_snake_case, dead_code)]
-struct C8 {
+pub struct C8 {
     memory: [u8; 4096],
     V: [u8; 16],
     I: u16,
@@ -35,7 +35,7 @@ impl Default for C8{
         Self { memory: [0; 4096], V: [0; 16], I: 0, PC: 0x200, stack: [0; 16], SP: 0 }
     }
 }
-#[allow(dead_code)]
+//#[allow(dead_code)]
 struct UIInterface{
     kill_receiver: Receiver<bool>,
     target_file: String,
@@ -61,12 +61,12 @@ impl UIInterface{
 
 pub struct Emulator{
     ui_interface: UIInterface,
-    context: EmulatorContext<Window>,
+    context: GraphicsContext<Window>,
 }
 
 
 impl Emulator{
-    fn init_context() -> EmulatorContext<Window> {
+    fn init_context() -> GraphicsContext<Window> {
         let sdl_ctx = sdl2::init().unwrap();
         let video_subsystem = sdl_ctx.video().unwrap();
 
@@ -79,7 +79,7 @@ impl Emulator{
         let mut canvas = window.into_canvas().build().unwrap();
         canvas.set_logical_size(64, 32).unwrap();
         
-        EmulatorContext{ sdl_ctx: sdl_ctx, canvas: canvas }
+        GraphicsContext{ sdl_ctx: sdl_ctx, canvas: canvas }
     }
 
     fn new(kill_receiver: Receiver<bool>, target_file: String, opcode_vec: Arc<Mutex<Vec<String>>>, egui_ctx: egui::Context) -> Emulator {
@@ -114,7 +114,7 @@ impl Emulator{
         let mut event_pump = self.context.sdl_ctx.event_pump().unwrap();
         let mut internals = C8::default();
 
-        { //read file block
+        {
             let mut file = File::open(self.ui_interface.target_file.clone()).unwrap();
 
             file.read(&mut internals.memory[0x200..]).unwrap();
@@ -132,7 +132,7 @@ impl Emulator{
                 break 'running;
             }
 
-            for event in event_pump.poll_iter(){
+            for event in event_pump.poll_iter() {
                 if let Event::Quit { .. } | Event::KeyDown { keycode: Some(Keycode::Escape | Keycode::Q), .. } = event {
                     break 'running;
                 }
@@ -143,12 +143,13 @@ impl Emulator{
             clocked!({
                 let opcode: u16 = (internals.memory[internals.PC as usize] as u16) << 8 | internals.memory[(internals.PC + 1) as usize] as u16;
                 
-                if opcode != 0{
-                    self.send_opcode(format!("{:04X}", opcode));
+                if opcode != 0 {
+                    self.send_opcode(format!("{:04X}: {:04X}",internals.PC, opcode));
                     internals.PC += 2;
+                }else{
+                    internals.PC = 0x200;
                 }
-                
-            }, last_opcode_tick, 60);
+            }, last_opcode_tick, 1000);
             
          
             clocked!({
@@ -160,7 +161,7 @@ impl Emulator{
 
     fn render_graphics(&mut self, gbuf: &[u8; 64*32]){
         let canvas = &mut self.context.canvas;
-        canvas.set_draw_color(Color::RGB(0,0,0));
+        canvas.set_draw_color(Color::BLACK);
         canvas.clear();
         for i in 0..64usize{
             for j in 0..32usize{
