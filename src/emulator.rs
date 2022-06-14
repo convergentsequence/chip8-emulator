@@ -17,6 +17,7 @@ use sdl2::rect::Point;
 use sdl2::{Sdl, render::Canvas, video::Window};
 use sdl2::render::{RenderTarget};
 
+use crate::emulator;
 use crate::emulator_ui::InterThreadData;
 
 const WINDOW_TITLE: &str = "CHIP-8";
@@ -42,7 +43,7 @@ pub struct C8 {
 
 impl Default for C8{
     fn default() -> Self {
-        Self { memory: [0; 4096], V: [0; 16], I: 0, PC: 0x200, stack: [0; 16], SP: 1, delay_timer: 0, sound_timer: 0, endloop: false }
+        Self { memory: [0; 4096], V: [0; 16], I: 0, PC: 0x200, stack: [0; 16], SP: 0, delay_timer: 0, sound_timer: 0, endloop: false }
     }
 }
 //#[allow(dead_code)]
@@ -112,6 +113,15 @@ impl Emulator{
         locked.internal_state.clone_from(internal_state);
     }
 
+    fn keycode_to_index(keycode: usize) -> Option<usize>{
+        if keycode >= 48 && keycode <= 57 {
+            return Some(keycode - 48);
+        }else if keycode >= 97 && keycode <= 102 {
+            return Some(10 + keycode - 97);
+        }
+        return None;
+    }
+
     fn start(&mut self){
         let timer = self.context.sdl_ctx.timer().unwrap();
         let mut current_tick: u32;
@@ -166,6 +176,10 @@ impl Emulator{
         let mut last_render_tick = 0u32;
         let mut frozen = false;
 
+        let mut key_states = [false; 16];
+
+        let mut wfi_register: i8 = -1; // -1 non blocking, everything else the key gets stored inside
+
         'running: loop {
             if let Ok(_) = self.ui_interface.kill_receiver.try_recv() {
                 break 'running;
@@ -174,6 +188,28 @@ impl Emulator{
             for event in event_pump.poll_iter() {
                 if let Event::Quit { .. } | Event::KeyDown { keycode: Some(Keycode::Escape | Keycode::Q), .. } = event {
                     break 'running;
+                } 
+
+                if let Event::KeyDown { keycode: Some(key), .. } = event{
+                    let key = Emulator::keycode_to_index(key as usize);
+                    match key {
+                        Some(key) => { 
+                            key_states[key] = true; 
+                            if wfi_register != -1 && !frozen{
+                                internals.V[wfi_register as usize] = key as u8;  
+                                wfi_register = -1;
+                            }
+                        },
+                        None => {},
+                    }  
+                }
+
+                if let Event::KeyUp { keycode: Some(key), .. } = event {
+                    let key = Emulator::keycode_to_index(key as usize);
+                    match key {
+                        Some(key) => { key_states[key] = false; },
+                        None => {},
+                    }
                 }
             }
             current_tick = timer.ticks();
@@ -186,13 +222,18 @@ impl Emulator{
                     return;
                 }
 
+                if wfi_register != -1 {
+                    return;
+                }
+
                 let opcode: u16 = (internals.memory[internals.PC as usize] as u16) << 8 | internals.memory[(internals.PC + 1) as usize] as u16;
                
                 let old_pc = internals.PC;
                 internals.PC += 2;
 
-                let mut opcode_description: String = "Unknown/unimplemented instruction".to_owned();
+                let mut opcode_description = "Unknown/unimplemented instruction".to_owned();
 
+               
                 match opcode >> 12 {
                     0 => {
                         match opcode & 0xFF {
@@ -211,7 +252,7 @@ impl Emulator{
                     1 => { // 0x1NNN - jump to location NNN
                         let nnn = opcode & 0xFFF;
                         if internals.PC - 2 == nnn {
-                            opcode_description = format!("Endloop");
+                            opcode_description = "Endloop".to_owned();
                             internals.endloop = true;
                         }else{
                             opcode_description = format!("Jumping to location 0x{:03X}", nnn);
@@ -226,10 +267,10 @@ impl Emulator{
                         internals.PC = nnn;
                     },
                     3 => { // 0x3XRR - skip next instruction if V[X] == 0xRR 
-                        let x = (opcode & 0xF00) >> 8;
+                        let x = ((opcode & 0xF00) >> 8) as usize;
                         let rr = (opcode & 0xFF) as u8;
                         opcode_description = format!("Skipping next instruction if V{:X}(0x{:02X}) == 0x{:02X}",x,internals.V[x as usize], rr);
-                        if internals.V[x as usize] == rr {
+                        if internals.V[x] == rr {
                             internals.PC += 2;
                         }
                     },
@@ -314,8 +355,8 @@ impl Emulator{
                                 let x = ((opcode & 0xF00) >> 8) as usize;
                                 let y = ((opcode & 0xF0) >> 4) as usize;
                                 opcode_description = format!("Subtract V{:X} from V{:X} store the result to V{:X} and store the borrow in VF" ,x ,y, x);
-                                internals.V[0xF] = if internals.V[x] > internals.V[y] {1} else {0};
-                                internals.V[x] = internals.V[y] - internals.V[x];
+                                internals.V[0xF] = if internals.V[y] > internals.V[x] {1} else {0};
+                                internals.V[x] = internals.V[y].wrapping_sub(internals.V[x]);
                             },
                             0xE => { // 0x8X0E - Shift VX to left,most significant bit goes to V15
                                 let x = ((opcode & 0xF00) >> 8) as usize;
@@ -326,6 +367,14 @@ impl Emulator{
                             _ => {}
                         }
                     },
+                    0x9 => { // 0x9XYN - Skip next instruction if Vx != VY
+                        let x = ((opcode & 0xF00) >> 8) as usize;
+                        let y = ((opcode & 0xF0) >> 4) as usize;
+                        opcode_description = format!("Skipping next instruction if V{:X} != V{:X}", x, y);
+                        if internals.V[x] != internals.V[y] {
+                            internals.PC += 2;
+                        }
+                    },
                     0xA => { // 0xANNN - Put NNN into I
                         let nnn = opcode & 0xFFF;
                         opcode_description = format!("Put 0x{:03X} into I", nnn);
@@ -334,7 +383,7 @@ impl Emulator{
                     0xB => {  // 0xBNNN - Jump to address NNN plus register V0
                         let nnn = opcode & 0xFFF;
                         opcode_description = format!("Jump to I + 0x{:03X}", nnn);
-                        internals.PC = nnn + internals.I;
+                        internals.PC = nnn + internals.V[0] as u16;
                     },
                     0xC => { // 0xCXKK - Set VX to (random number between 0 - 255) & KK
                         let x = ((opcode & 0xF00) >> 8) as usize;
@@ -373,6 +422,81 @@ impl Emulator{
                                     gbuf[(j+sx)%64 + ((i+sy)%32)*64] ^= 1;
                                 }
                             }
+                        }
+                    },
+                    0xE => {
+                        match opcode & 0xFF {
+                            0x9E => { // 0xEx9E - skip next instruction if key in Vx is pressed
+                                let x = ((opcode & 0xF00) >> 8) as usize;
+                                opcode_description = format!("Skipping next instruction if key in V{:X} ({:X}) is pressed", x, internals.V[x]);
+                                if key_states[internals.V[x] as usize] {
+                                    internals.PC += 2;
+                                }
+                            },
+                            0xA1 => { // 0xEx9E - skip next instruction if key in Vx is pressed
+                                let x = ((opcode & 0xF00) >> 8) as usize;
+                                opcode_description = format!("Skipping next instruction if key in V{:X} ({:X}) is not pressed", x, internals.V[x]);
+                                if !key_states[internals.V[x] as usize] {
+                                    internals.PC += 2;
+                                }
+                            },
+                            _ => {}
+                        }
+                    },
+                    0xF => {
+                        match opcode & 0xFF { // 0xFx07 - put delay timer into Vx
+                            0x7 => {
+                                let x = ((opcode & 0xF00) >> 8) as usize;
+                                opcode_description = format!("Putting value of delay timer into V{:X}",x);
+                                internals.V[x] = internals.delay_timer;
+                            },
+                            0xA => { // 0xFx0A - Wait for key press store the value of the key in Vx
+                                let x = ((opcode & 0xF00) >> 8) as usize;
+                                opcode_description = format!("Waiting for keypress and storing result into V{:X}", x);
+                                wfi_register = x as i8;
+                            },
+                            0x15 => { // 0xFx15 - Set delay timer to value of Vx
+                                let x = ((opcode & 0xF00) >> 8) as usize;
+                                opcode_description = format!("Setting delay timer to the value of V{:X}", x);
+                                internals.delay_timer = internals.V[x];
+                            },
+                            0x18 => { // 0xFx18 - set sound timer value to Vx
+                                let x = ((opcode & 0xF00) >> 8) as usize;
+                                opcode_description = format!("Setting sound timer to the value of V{:X}", x);
+                                internals.sound_timer = internals.V[x];
+                            },
+                            0x1E => { // 0xFx1E - value of Vx is added to I
+                                let x = ((opcode & 0xF00) >> 8) as usize;
+                                opcode_description = format!("Adding the value of V{:X} to I", x);
+                                internals.I += internals.V[x] as u16;
+                            },
+                            0x29 => { // 0xFx29 - the value of I is set to sprite location of digit Vx
+                                let x = ((opcode & 0xF00) >> 8) as usize;
+                                opcode_description = format!("Setting I to location of the sprite of the digit {:X}", x);
+                                internals.I = internals.V[x] as u16 * 5;
+                            },
+                            0x33 => { // 0xFx33 - store BCD represebtation of Vx in I
+                                let x = ((opcode & 0xF00) >> 8) as usize;
+                                opcode_description = format!("Storing BCD representation of V{:X} into location I", x);
+                                internals.memory[internals.I as usize] = internals.V[x] / 100;
+                                internals.memory[internals.I as usize + 1] = (internals.V[x] / 10) % 10;
+                                internals.memory[internals.I as usize + 2] = internals.V[x] % 10;
+                            },
+                            0x55 => { // 0xFx55 - store the value of registers 0 to X into memory at I
+                                let x = ((opcode & 0xF00) >> 8) as usize;
+                                opcode_description = format!("Storing values of register [0, {:X}] into memory at I", x);
+                                let mem_slice = &mut internals.memory[internals.I as usize..=internals.I as usize + x];
+                                let v_slice = &internals.V[0..=x];
+                                mem_slice.clone_from_slice(v_slice);
+                            },
+                            0x65 => { // 0xFx65 load registers from V0 to VX from location I
+                                let x = ((opcode & 0xF00) >> 8) as usize;
+                                opcode_description = format!("Loading values of register [0, {:X}] from address I", x);
+                                let v_slice = &mut internals.V[0..=x];
+                                let mem_slice = &internals.memory[internals.I as usize..=internals.I as usize + x];
+                                v_slice.clone_from_slice(mem_slice);
+                            },
+                            _ => {}
                         }
                     },
                     _ => {}
@@ -417,7 +541,7 @@ impl Emulator{
 
 pub fn start_thread(kill_receiver: Receiver<bool>, egui_ctx: egui::Context, inter_thread: Arc<Mutex<InterThreadData>>) -> thread::JoinHandle<()>{
     thread::spawn(move || {
-        let mut emulator = Emulator::new(kill_receiver, (r"C:\C8Games\test_opcode.ch8").to_owned(), egui_ctx, inter_thread);
+        let mut emulator = Emulator::new(kill_receiver, (r"C:\C8Games\c8_test.c8").to_owned(), egui_ctx, inter_thread);
         emulator.start();
     })
 }
