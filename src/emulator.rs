@@ -269,6 +269,7 @@ impl Emulator{
                     },
                     2 => { // 0x2NNN - jump to subroutine at address NNN
                         let nnn = opcode & 0xFFF;
+                        opcode_description = format!("Jumping to subroutine at 0x{:03X}", nnn);
                         internals.stack[internals.SP] = internals.PC;
                         internals.SP += 1;
                         internals.PC = nnn;
@@ -548,7 +549,7 @@ impl Emulator{
 
 pub fn start_thread(kill_receiver: Receiver<bool>, egui_ctx: egui::Context, inter_thread: Arc<Mutex<InterThreadData>>) -> thread::JoinHandle<()>{
     thread::spawn(move || {
-        let mut emulator = Emulator::new(kill_receiver, (r"C:\C8Games\Airplane.ch8").to_owned(), egui_ctx, inter_thread);
+        let mut emulator = Emulator::new(kill_receiver, (r"C:\C8Games\Tank.ch8").to_owned(), egui_ctx, inter_thread);
         emulator.start();
     })
 }
