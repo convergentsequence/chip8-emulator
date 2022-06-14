@@ -17,7 +17,6 @@ use sdl2::rect::Point;
 use sdl2::{Sdl, render::Canvas, video::Window};
 use sdl2::render::{RenderTarget};
 
-use crate::emulator;
 use crate::emulator_ui::InterThreadData;
 
 const WINDOW_TITLE: &str = "CHIP-8";
@@ -73,6 +72,7 @@ impl UIInterface{
 pub struct Emulator{
     ui_interface: UIInterface,
     context: GraphicsContext<Window>,
+    keymap: [i32; 16],
 }
 
 
@@ -90,6 +90,7 @@ impl Emulator{
         let mut canvas = window.into_canvas().build().unwrap();
         canvas.set_logical_size(64, 32).unwrap();
         
+
         GraphicsContext{ sdl_ctx: sdl_ctx, canvas: canvas }
     }
 
@@ -99,6 +100,7 @@ impl Emulator{
         Emulator { 
             ui_interface: UIInterface::new(kill_receiver, target_file, egui_ctx, inter_thread),
             context: Emulator::init_context(),
+            keymap: [0; 16],
         }
     }
     
@@ -113,18 +115,22 @@ impl Emulator{
         locked.internal_state.clone_from(internal_state);
     }
 
-    fn keycode_to_index(keycode: usize) -> Option<usize>{
-        if keycode >= 48 && keycode <= 57 {
-            return Some(keycode - 48);
-        }else if keycode >= 97 && keycode <= 102 {
-            return Some(10 + keycode - 97);
+    fn keycode_to_index(keycode: usize, keymap: &[i32; 16]) -> Option<usize>{
+        for i in 0..16 {
+            if keycode == keymap[i] as usize {
+                return Some(i);
+            }
         }
-        return None;
+        None
     }
 
     fn start(&mut self){
         let timer = self.context.sdl_ctx.timer().unwrap();
         let mut current_tick: u32;
+
+        {
+            self.keymap.clone_from(&self.ui_interface.inter_thread.lock().keymap);
+        }
 
         macro_rules! clocked {
             ($code:block, $last_tick:expr, $freq:expr) => {
@@ -191,9 +197,10 @@ impl Emulator{
                 } 
 
                 if let Event::KeyDown { keycode: Some(key), .. } = event{
-                    let key = Emulator::keycode_to_index(key as usize);
+                    let key = Emulator::keycode_to_index(key as usize, &self.keymap);
                     match key {
                         Some(key) => { 
+                            //println!("{}", key as i32);
                             key_states[key] = true; 
                             if wfi_register != -1 && !frozen{
                                 internals.V[wfi_register as usize] = key as u8;  
@@ -205,7 +212,7 @@ impl Emulator{
                 }
 
                 if let Event::KeyUp { keycode: Some(key), .. } = event {
-                    let key = Emulator::keycode_to_index(key as usize);
+                    let key = Emulator::keycode_to_index(key as usize, &self.keymap);
                     match key {
                         Some(key) => { key_states[key] = false; },
                         None => {},
@@ -541,7 +548,7 @@ impl Emulator{
 
 pub fn start_thread(kill_receiver: Receiver<bool>, egui_ctx: egui::Context, inter_thread: Arc<Mutex<InterThreadData>>) -> thread::JoinHandle<()>{
     thread::spawn(move || {
-        let mut emulator = Emulator::new(kill_receiver, (r"C:\C8Games\c8_test.c8").to_owned(), egui_ctx, inter_thread);
+        let mut emulator = Emulator::new(kill_receiver, (r"C:\C8Games\Airplane.ch8").to_owned(), egui_ctx, inter_thread);
         emulator.start();
     })
 }

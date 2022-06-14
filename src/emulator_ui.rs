@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::sync::mpsc::channel;
 use std::sync::mpsc::{Sender};
 use std::thread::JoinHandle;
+use sdl2::keyboard::Keycode;
 
 use crate::emulator;
 
@@ -25,11 +26,53 @@ impl Default for WindowStates {
 
 struct UIStates {
     memory_slider: i32,
+    keymap: [i32; 16],
+    listen_for_key: i32,
 }
 
 impl Default for UIStates{
     fn default() -> Self {
-        Self { memory_slider: 3840, }
+        Self { 
+            memory_slider: 3840, 
+            keymap: UIStates::keymap_default(),
+            listen_for_key: -1,
+        }
+    }
+}
+
+impl UIStates {
+    fn name_from_keycode(keycode: i32) -> Option<String>{
+        let keycode = sdl2::keyboard::Keycode::from_i32(keycode)?;
+        Some(keycode.name())
+    }
+
+    fn key_from_name(name: String) -> Option<Keycode> {
+        if name.len() == 4 && name[0..=2].eq("Num") {
+            let name = &name.chars().nth(3).unwrap().to_string();
+            return Some(Keycode::from_name(name).unwrap());
+        }else{
+            return  Keycode::from_name(&name);
+        }
+    }
+    fn keymap_default() -> [i32; 16] {
+        [
+            48, // 0
+            49, // 1
+            50, // 2
+            51, // 3
+            52, // 4
+            53, // 5
+            54, // 6
+            55, // 7
+            56, // 8
+            57, // 9
+            97, // A
+            98, // B
+            99, // C
+            100,// D
+            101,// E
+            102 // F
+        ]
     }
 }
 
@@ -39,6 +82,7 @@ pub struct InterThreadData{
     pub executed_instructions: Vec<String>,
     pub internal_state: emulator::C8,
     pub freeze: bool,
+    pub keymap: [i32; 16]
 }
 
 impl InterThreadData{
@@ -47,6 +91,7 @@ impl InterThreadData{
             executed_instructions: vec![],
             internal_state: emulator::C8::default(),
             freeze: false,
+            keymap: UIStates::keymap_default(),
         }
     }
 }
@@ -75,7 +120,7 @@ impl EmulatorInterface{
         handle.join().unwrap();
     }
 
-    fn start(&mut self, egui_ctx: &egui::Context) {
+    fn start(&mut self, egui_ctx: &egui::Context, keymap: &[i32; 16]) {
         if let Some(_) = self.emulator_handle{
             if self.status() {
                 panic!("Attempted to start emulator while already running");
@@ -83,7 +128,9 @@ impl EmulatorInterface{
                 self.join_thread();
             }
         }
-
+        {
+            self.inter_thread.lock().keymap.clone_from(keymap);
+        }
         let kill_channel = channel();
         self.kill_sender = Some(kill_channel.0);
         self.emulator_handle = Some(emulator::start_thread(kill_channel.1, egui_ctx.clone(), self.inter_thread.clone()));
@@ -187,7 +234,7 @@ impl eframe::App for EmulatorUI {
                 // <start stop button>
                 if ui.button(if should_start {"Start Emulator"} else {"Stop Emulator"}).clicked() {
                     if should_start{
-                        self.emulator_interface.start(&ctx);
+                        self.emulator_interface.start(&ctx, &self.ui_states.keymap);
                     }else{
                         self.emulator_interface.kill();
                     }
@@ -384,5 +431,50 @@ impl eframe::App for EmulatorUI {
             }
   
         // </memory>
+
+        // <keybinds>
+        egui::Window::new("Keybinds")
+        .open(&mut self.window_states.keybinds)
+        .default_size([500.0, 500.0])
+        .resizable(false)
+        .show(ctx, |ui| {
+            for keybind in 0..=0xFi32 {
+                ui.horizontal(|ui| {
+                    ui.monospace(format!("{:X}: ", keybind));
+                    let bind = UIStates::name_from_keycode(self.ui_states.keymap[keybind as usize]);
+                    match bind {
+                        Some(name) => {
+                            if self.ui_states.listen_for_key == -1 {
+                                if ui.button(name + " - rebind").clicked() {
+                                    self.ui_states.listen_for_key = keybind;
+                                }
+                            }else if self.ui_states.listen_for_key == keybind{
+                                ui.add_enabled_ui(false, |ui| {
+                                    ui.button("Press key...").clicked();
+                                });
+
+                                let events = &ctx.input().events;
+                                for event in events.iter() {
+                                    if let egui::Event::Key { key, pressed: true,..  } = event {
+                                        println!("{}", Keycode::Num2.name());
+                                        let keyname = format!("{:?}", key);
+                                        let key = UIStates::key_from_name(keyname).unwrap();
+                                        self.ui_states.keymap[self.ui_states.listen_for_key as usize] = key as i32;
+                                        self.ui_states.listen_for_key = -1;
+                                    }
+                                }
+                            }
+                        },
+                        None => {},
+                    }
+                    
+                });
+            }
+            if ui.button("Reset keybinds").clicked() {
+                self.ui_states.keymap.clone_from(&UIStates::keymap_default());
+                self.ui_states.listen_for_key = -1;
+            }
+        });
+        // </keybinds>
     }
 }
